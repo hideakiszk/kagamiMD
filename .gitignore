@@ -1,0 +1,31 @@
+## [Visual Studio]
+.vs/
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.sln.docstates
+*.vssscc
+
+## [Build Artifacts]
+publish/
+[Tt]est[Rr]esults/
+
+## [KagamiMD Specific Logs & Results]
+errors.log
+build_errors.txt
+build_output.txt
+publish_result.txt
+test_results.txt
+
+## [WebView2 Runtime Data]
+*.exe.WebView2/
+
+## [OS Specific]
+Thumbs.db
+desktop.ini
+
+## [Other]
+*.bak
+*.tmp
+*.log

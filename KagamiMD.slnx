@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="KagamiMD.csproj" />
+  <Project Path="KagamiMD.Tests/KagamiMD.Tests.csproj" />
+</Solution>
