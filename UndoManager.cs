@@ -9,11 +9,13 @@ public class UndoManager
     {
         public string Text;
         public int SelectionStart;
+        public int FirstVisibleLine;
 
-        public State(string text, int selectionStart)
+        public State(string text, int selectionStart, int firstVisibleLine)
         {
             Text = text;
             SelectionStart = selectionStart;
+            FirstVisibleLine = firstVisibleLine;
         }
     }
 
@@ -24,14 +26,14 @@ public class UndoManager
     public bool CanUndo => _currentIndex > 0;
     public bool CanRedo => _currentIndex < _history.Count - 1;
 
-    public void Clear(string initialText, int selectionStart)
+    public void Clear(string initialText, int selectionStart, int firstVisibleLine = 0)
     {
         _history.Clear();
-        _history.Add(new State(initialText, selectionStart));
+        _history.Add(new State(initialText, selectionStart, firstVisibleLine));
         _currentIndex = 0;
     }
 
-    public void RecordState(string text, int selectionStart)
+    public void RecordState(string text, int selectionStart, int firstVisibleLine)
     {
         // If we are recording a state while not at the end of history (after some undos),
         // we remove the future states.
@@ -43,11 +45,11 @@ public class UndoManager
         // Avoid recording the exact same state sequentially
         if (_currentIndex >= 0 && _history[_currentIndex].Text == text)
         {
-            _history[_currentIndex] = new State(text, selectionStart); // Update selection only
+            _history[_currentIndex] = new State(text, selectionStart, firstVisibleLine); // Update selection and scroll only
             return;
         }
 
-        _history.Add(new State(text, selectionStart));
+        _history.Add(new State(text, selectionStart, firstVisibleLine));
         
         if (_history.Count > MaxHistory + 1) // +1 because the first state is the initial one
         {
@@ -65,21 +67,21 @@ public class UndoManager
         }
     }
 
-    public (string Text, int SelectionStart)? Undo()
+    public (string Text, int SelectionStart, int FirstVisibleLine)? Undo()
     {
         if (!CanUndo) return null;
         
         _currentIndex--;
         var state = _history[_currentIndex];
-        return (state.Text, state.SelectionStart);
+        return (state.Text, state.SelectionStart, state.FirstVisibleLine);
     }
 
-    public (string Text, int SelectionStart)? Redo()
+    public (string Text, int SelectionStart, int FirstVisibleLine)? Redo()
     {
         if (!CanRedo) return null;
         
         _currentIndex++;
         var state = _history[_currentIndex];
-        return (state.Text, state.SelectionStart);
+        return (state.Text, state.SelectionStart, state.FirstVisibleLine);
     }
 }

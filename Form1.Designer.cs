@@ -41,7 +41,17 @@ partial class Form1
     private System.Windows.Forms.ToolStripMenuItem manualPreviewToolStripMenuItem;
     private System.Windows.Forms.ToolStripMenuItem templateToolStripMenuItem;
     private System.Windows.Forms.ToolStripMenuItem tableToolStripMenuItem;
+    private System.Windows.Forms.ToolStripMenuItem textColorToolStripMenuItem;
+    private System.Windows.Forms.ToolStripMenuItem linkToolStripMenuItem;
+    private System.Windows.Forms.ToolStripMenuItem scrollToolStripMenuItem;
+    private System.Windows.Forms.ToolStripMenuItem independentScrollToolStripMenuItem;
+    private System.Windows.Forms.ToolStripMenuItem syncedScrollToolStripMenuItem;
+    private System.Windows.Forms.ToolStripMenuItem displayContentToolStripMenuItem;
+    private System.Windows.Forms.ToolStripMenuItem showBothToolStripMenuItem;
+    private System.Windows.Forms.ToolStripMenuItem showLeftOnlyToolStripMenuItem;
+    private System.Windows.Forms.ToolStripMenuItem showRightOnlyToolStripMenuItem;
     private System.Windows.Forms.SplitContainer splitContainer1;
+    private System.Windows.Forms.VScrollBar syncVScrollBar;
     private System.Windows.Forms.TextBox editorTextBox;
     private Microsoft.Web.WebView2.WinForms.WebView2 previewWebView;
 
@@ -111,7 +121,17 @@ partial class Form1
         this.manualPreviewToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
         this.templateToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
         this.tableToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+        this.textColorToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+        this.linkToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+        this.scrollToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+        this.independentScrollToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+        this.syncedScrollToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+        this.displayContentToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+        this.showBothToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+        this.showLeftOnlyToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+        this.showRightOnlyToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
         this.splitContainer1 = new System.Windows.Forms.SplitContainer();
+        this.syncVScrollBar = new System.Windows.Forms.VScrollBar();
         this.editorTextBox = new System.Windows.Forms.TextBox();
         this.previewWebView = new Microsoft.Web.WebView2.WinForms.WebView2();
         this.menuStrip1.SuspendLayout();
@@ -208,7 +228,9 @@ partial class Form1
         this.viewToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
         this.wordWrapToolStripMenuItem,
         this.previewToolStripMenuItem,
-        this.previewUpdateToolStripMenuItem});
+        this.previewUpdateToolStripMenuItem,
+        this.displayContentToolStripMenuItem,
+        this.scrollToolStripMenuItem});
         this.viewToolStripMenuItem.Name = "viewToolStripMenuItem";
         this.viewToolStripMenuItem.Size = new System.Drawing.Size(58, 20);
         this.viewToolStripMenuItem.Text = "表示";
@@ -247,10 +269,63 @@ partial class Form1
         this.previewUpdateToolStripMenuItem.Text = "プレビュー更新";
         this.previewUpdateToolStripMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F5;
         // 
+        // displayContentToolStripMenuItem
+        // 
+        this.displayContentToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+        this.showBothToolStripMenuItem,
+        this.showLeftOnlyToolStripMenuItem,
+        this.showRightOnlyToolStripMenuItem});
+        this.displayContentToolStripMenuItem.Name = "displayContentToolStripMenuItem";
+        this.displayContentToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.displayContentToolStripMenuItem.Text = "表示内容";
+        // 
+        // showBothToolStripMenuItem
+        // 
+        this.showBothToolStripMenuItem.Checked = true;
+        this.showBothToolStripMenuItem.Name = "showBothToolStripMenuItem";
+        this.showBothToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.showBothToolStripMenuItem.Text = "両方";
+        // 
+        // showLeftOnlyToolStripMenuItem
+        // 
+        this.showLeftOnlyToolStripMenuItem.Name = "showLeftOnlyToolStripMenuItem";
+        this.showLeftOnlyToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.showLeftOnlyToolStripMenuItem.Text = "左側のみ";
+        // 
+        // showRightOnlyToolStripMenuItem
+        // 
+        this.showRightOnlyToolStripMenuItem.Name = "showRightOnlyToolStripMenuItem";
+        this.showRightOnlyToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.showRightOnlyToolStripMenuItem.Text = "右側のみ";
+        // 
+        // scrollToolStripMenuItem
+        // 
+        this.scrollToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+        this.independentScrollToolStripMenuItem,
+        this.syncedScrollToolStripMenuItem});
+        this.scrollToolStripMenuItem.Name = "scrollToolStripMenuItem";
+        this.scrollToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.scrollToolStripMenuItem.Text = "スクロール";
+        // 
+        // independentScrollToolStripMenuItem
+        // 
+        this.independentScrollToolStripMenuItem.Checked = true;
+        this.independentScrollToolStripMenuItem.Name = "independentScrollToolStripMenuItem";
+        this.independentScrollToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.independentScrollToolStripMenuItem.Text = "左右独立";
+        // 
+        // syncedScrollToolStripMenuItem
+        // 
+        this.syncedScrollToolStripMenuItem.Name = "syncedScrollToolStripMenuItem";
+        this.syncedScrollToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.syncedScrollToolStripMenuItem.Text = "左右連動";
+        // 
         // templateToolStripMenuItem
         // 
         this.templateToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
-        this.tableToolStripMenuItem});
+        this.tableToolStripMenuItem,
+        this.textColorToolStripMenuItem,
+        this.linkToolStripMenuItem});
         this.templateToolStripMenuItem.Name = "templateToolStripMenuItem";
         this.templateToolStripMenuItem.Size = new System.Drawing.Size(77, 20);
         this.templateToolStripMenuItem.Text = "テンプレート";
@@ -260,6 +335,37 @@ partial class Form1
         this.tableToolStripMenuItem.Name = "tableToolStripMenuItem";
         this.tableToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
         this.tableToolStripMenuItem.Text = "表";
+        // 
+        // textColorToolStripMenuItem
+        // 
+        this.textColorToolStripMenuItem.Name = "textColorToolStripMenuItem";
+        this.textColorToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.textColorToolStripMenuItem.Text = "文字色変更";
+        this.templateToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+        this.tableToolStripMenuItem,
+        this.textColorToolStripMenuItem,
+        this.linkToolStripMenuItem});
+        this.templateToolStripMenuItem.Name = "templateToolStripMenuItem";
+        this.templateToolStripMenuItem.Size = new System.Drawing.Size(77, 20);
+        this.templateToolStripMenuItem.Text = "テンプレート";
+        // 
+        // tableToolStripMenuItem
+        // 
+        this.tableToolStripMenuItem.Name = "tableToolStripMenuItem";
+        this.tableToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.tableToolStripMenuItem.Text = "表";
+        // 
+        // textColorToolStripMenuItem
+        // 
+        this.textColorToolStripMenuItem.Name = "textColorToolStripMenuItem";
+        this.textColorToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.textColorToolStripMenuItem.Text = "文字色変更";
+        // 
+        // linkToolStripMenuItem
+        // 
+        this.linkToolStripMenuItem.Name = "linkToolStripMenuItem";
+        this.linkToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.linkToolStripMenuItem.Text = "リンク";
         // 
         // editToolStripMenuItem
         // 
@@ -399,8 +505,18 @@ partial class Form1
         this.splitContainer1.Orientation = System.Windows.Forms.Orientation.Vertical;
         this.splitContainer1.SplitterDistance = 520;
         this.splitContainer1.TabIndex = 0;
+        this.splitContainer1.Panel1.Controls.Add(this.syncVScrollBar);
         this.splitContainer1.Panel1.Controls.Add(this.editorTextBox);
         this.splitContainer1.Panel2.Controls.Add(this.previewWebView);
+        // 
+        // syncVScrollBar
+        // 
+        this.syncVScrollBar.Dock = System.Windows.Forms.DockStyle.Right;
+        this.syncVScrollBar.Location = new System.Drawing.Point(503, 0);
+        this.syncVScrollBar.Name = "syncVScrollBar";
+        this.syncVScrollBar.Size = new System.Drawing.Size(17, 700);
+        this.syncVScrollBar.TabIndex = 1;
+        this.syncVScrollBar.Visible = false;
         this.editorTextBox.AcceptsTab = true;
         this.editorTextBox.BorderStyle = System.Windows.Forms.BorderStyle.None;
         this.editorTextBox.Dock = System.Windows.Forms.DockStyle.Fill;

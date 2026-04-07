@@ -41,7 +41,10 @@ public partial class Form1 : Form
         lfToolStripMenuItem.Click += (_, _) => SelectLineEnding(lfToolStripMenuItem, crlfToolStripMenuItem);
         wordWrapToolStripMenuItem.CheckedChanged += (_, _) => ApplyWordWrap(wordWrapToolStripMenuItem.Checked);
         ApplyWordWrap(true);
-        Resize += (_, _) => CenterSplitters();
+        Resize += (_, _) => {
+            CenterSplitters();
+            UpdateSyncScrollBar();
+        };
         previewUpdateToolStripMenuItem.Click += (_, _) => UpdatePreview();
         Shown += async (_, _) =>
         {
@@ -86,6 +89,7 @@ public partial class Form1 : Form
                 }
             };
 
+            previewWebView.CoreWebView2.WebMessageReceived += PreviewWebView_WebMessageReceived;
             previewReady = true;
             CenterSplitters();
             UpdatePreview();
@@ -109,6 +113,14 @@ public partial class Form1 : Form
         pasteToolStripMenuItem.Click += (_, _) => editorTextBox.Paste();
         editToolStripMenuItem.DropDownOpening += (_, _) => UpdateEditMenu();
         tableToolStripMenuItem.Click += (_, _) => InsertTableTemplate();
+        textColorToolStripMenuItem.Click += (_, _) => InsertTextColorTemplate();
+        linkToolStripMenuItem.Click += (_, _) => InsertLinkTemplate();
+        showBothToolStripMenuItem.Click += (_, _) => SelectDisplayMode(true, true);
+        showLeftOnlyToolStripMenuItem.Click += (_, _) => SelectDisplayMode(true, false);
+        showRightOnlyToolStripMenuItem.Click += (_, _) => SelectDisplayMode(false, true);
+        independentScrollToolStripMenuItem.Click += (_, _) => SelectScrollMode(false);
+        syncedScrollToolStripMenuItem.Click += (_, _) => SelectScrollMode(true);
+        syncVScrollBar.Scroll += SyncVScrollBar_Scroll;
 
         _undoTimer.Interval = 800;
         _undoTimer.Tick += (s, e) =>
@@ -119,7 +131,7 @@ public partial class Form1 : Form
 
         editorTextBox.KeyDown += EditorTextBox_KeyDown;
         // 初期状態を記録
-        _undoManager.Clear(editorTextBox.Text, 0);
+        _undoManager.Clear(editorTextBox.Text, 0, (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero));
 
         editorTextBox.TextChanged += (_, _) => 
         {
@@ -138,7 +150,14 @@ public partial class Form1 : Form
                 _undoTimer.Stop();
                 _undoTimer.Start();
             }
+            UpdateSyncScrollBar();
         };
+
+        editorTextBox.KeyUp += (_, _) => UpdateSyncFromEditor();
+        editorTextBox.MouseDown += (_, _) => UpdateSyncFromEditor();
+        editorTextBox.MouseWheel += EditorTextBox_MouseWheel;
+
+        previewWebView.NavigationCompleted += (_, _) => UpdateSyncScrollBar();
 
         FormClosing += Form1_FormClosing;
 
@@ -180,6 +199,11 @@ public partial class Form1 : Form
 
     private void CenterSplitters()
     {
+        if (splitContainer1.Panel1Collapsed || splitContainer1.Panel2Collapsed)
+        {
+            return;
+        }
+
         var availableWidth = splitContainer1.ClientSize.Width - splitContainer1.SplitterWidth;
         if (availableWidth <= 0)
         {
@@ -187,6 +211,166 @@ public partial class Form1 : Form
         }
 
         splitContainer1.SplitterDistance = availableWidth / 2;
+    }
+
+    private void SelectDisplayMode(bool showLeft, bool showRight)
+    {
+        splitContainer1.Panel1Collapsed = !showLeft;
+        splitContainer1.Panel2Collapsed = !showRight;
+
+        showBothToolStripMenuItem.Checked = showLeft && showRight;
+        showLeftOnlyToolStripMenuItem.Checked = showLeft && !showRight;
+        showRightOnlyToolStripMenuItem.Checked = !showLeft && showRight;
+
+        if (!showLeft && showRight && syncedScrollToolStripMenuItem.Checked)
+        {
+            // 右側のみ表示かつ左右連動中の場合、独立スクロールに切り替える（操作不能になるのを防ぐ）
+            SelectScrollMode(false);
+        }
+
+        if (showLeft && showRight)
+        {
+            CenterSplitters();
+        }
+    }
+
+    private void SelectScrollMode(bool synced)
+    {
+        independentScrollToolStripMenuItem.Checked = !synced;
+        syncedScrollToolStripMenuItem.Checked = synced;
+
+        syncVScrollBar.Visible = synced;
+        ApplyWordWrap(wordWrapToolStripMenuItem.Checked); // 更新してスクロールバーの状態を反映
+
+        if (synced)
+        {
+            UpdateSyncScrollBar();
+            // WebView2のスクロールバーを表示させたまま、CSSで隠す（ホイール入力を有効にするため）
+            previewWebView.CoreWebView2?.ExecuteScriptAsync("""
+                (function() {
+                    var styleId = 'kagami-scroll-hide';
+                    if (!document.getElementById(styleId)) {
+                        var style = document.createElement('style');
+                        style.id = styleId;
+                        style.innerHTML = '*::-webkit-scrollbar { display: none !important; } body { -ms-overflow-style: none !important; scrollbar-width: none !important; }';
+                        document.head.appendChild(style);
+                    }
+                })()
+                """);
+        }
+        else
+        {
+            // CSSを削除してスクロールバーを表示する
+            previewWebView.CoreWebView2?.ExecuteScriptAsync("var s = document.getElementById('kagami-scroll-hide'); if (s) s.remove();");
+        }
+    }
+
+    private void UpdateSyncScrollBar()
+    {
+        if (!syncedScrollToolStripMenuItem.Checked) return;
+
+        // 簡易的に行数に基づいたスクロール範囲を設定
+        int totalLines = editorTextBox.Lines.Length;
+        syncVScrollBar.Minimum = 0;
+        syncVScrollBar.Maximum = Math.Max(0, totalLines);
+        syncVScrollBar.LargeChange = Math.Max(1, editorTextBox.Height / editorTextBox.Font.Height);
+    }
+
+    private void SyncVScrollBar_Scroll(object? sender, ScrollEventArgs e)
+    {
+        SyncToLineIndex(e.NewValue);
+    }
+
+    private void EditorTextBox_MouseWheel(object? sender, MouseEventArgs e)
+    {
+        if (!syncedScrollToolStripMenuItem.Checked) return;
+
+        // マウスホイールによる手動スクロール（スクロールバーを非表示にしているため）
+        int delta = -e.Delta / 40; // 通常1ノッチ120なので、3行分に相当
+        int newValue = syncVScrollBar.Value + delta;
+        
+        int range = Math.Max(0, syncVScrollBar.Maximum - syncVScrollBar.LargeChange + 1);
+        newValue = Math.Clamp(newValue, syncVScrollBar.Minimum, range);
+
+        if (newValue != syncVScrollBar.Value)
+        {
+            syncVScrollBar.Value = newValue;
+            SyncToLineIndex(newValue);
+        }
+    }
+
+    private void PreviewWebView_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        if (!syncedScrollToolStripMenuItem.Checked) return;
+
+        try
+        {
+            var ratioStr = e.TryGetWebMessageAsString();
+            if (double.TryParse(ratioStr, out double ratio))
+            {
+                int range = Math.Max(0, syncVScrollBar.Maximum - syncVScrollBar.LargeChange + 1);
+                int lineIndex = (int)(range * ratio);
+                
+                if (syncVScrollBar.Value != lineIndex)
+                {
+                    syncVScrollBar.Value = lineIndex;
+                    // エディタ側のみ同期（WebView側は自身ですでに移動済みのため、ループを防ぐ）
+                    int firstVisibleLine = (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero);
+                    int diff = lineIndex - firstVisibleLine;
+                    SendMessage(editorTextBox.Handle, EM_LINESCROLL, 0, (IntPtr)diff);
+                }
+            }
+        }
+        catch { }
+    }
+
+    private void UpdateSyncFromEditor()
+    {
+        if (!syncedScrollToolStripMenuItem.Checked) return;
+
+        int firstVisibleLine = (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero);
+        
+        // 最大値を超えないように制限
+        int range = Math.Max(0, syncVScrollBar.Maximum - syncVScrollBar.LargeChange + 1);
+        int constrainedLine = Math.Min(range, firstVisibleLine);
+
+        if (syncVScrollBar.Value != constrainedLine)
+        {
+            syncVScrollBar.Value = constrainedLine;
+            SyncWebViewToLine(constrainedLine);
+        }
+    }
+
+    private void SyncToLineIndex(int lineIndex)
+    {
+        // エディタをスクロール
+        int firstVisibleLine = (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero);
+        int diff = lineIndex - firstVisibleLine;
+        SendMessage(editorTextBox.Handle, EM_LINESCROLL, 0, (IntPtr)diff);
+
+        // プレビューをスクロール
+        SyncWebViewToLine(lineIndex);
+    }
+
+    private async void SyncWebViewToLine(int lineIndex)
+    {
+        if (previewWebView.CoreWebView2 != null)
+        {
+            // 割合計算
+            double range = Math.Max(1, syncVScrollBar.Maximum - syncVScrollBar.LargeChange + 1);
+            double ratio = (double)lineIndex / range;
+            
+            // WebView上の高さを取得してスクロール
+            // 無限ループを防ぐため、JS側で一時的にイベントを無効化する
+            string script = $$"""
+                (function() {
+                    var height = document.body.scrollHeight - window.innerHeight;
+                    window.isInternalScrolling = true;
+                    window.scrollTo(0, Math.max(0, height * {{ratio}}));
+                })()
+                """;
+            await previewWebView.CoreWebView2.ExecuteScriptAsync(script);
+        }
     }
 
     private void SelectSaveEncoding(ToolStripMenuItem selectedItem)
@@ -238,7 +422,7 @@ public partial class Form1 : Form
         editorTextBox.SelectionStart = 0;
         editorTextBox.SelectionLength = 0;
         _isModified = false;
-        _undoManager.Clear(editorTextBox.Text, 0); // 履歴をリセット
+        _undoManager.Clear(editorTextBox.Text, 0, (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero)); // 履歴をリセット
         UpdatePreview();
         UpdateWindowTitle();
         AddToHistory(currentFilePath);
@@ -287,7 +471,8 @@ public partial class Form1 : Form
     private void RecordUndoState()
     {
         if (_isUndoingRedoing) return;
-        _undoManager.RecordState(editorTextBox.Text, editorTextBox.SelectionStart);
+        int firstVisibleLine = (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero);
+        _undoManager.RecordState(editorTextBox.Text, editorTextBox.SelectionStart, firstVisibleLine);
     }
 
     private void Undo()
@@ -320,13 +505,36 @@ public partial class Form1 : Form
         }
     }
 
-    private void ApplyState((string Text, int SelectionStart) state)
+    private void ApplyState((string Text, int SelectionStart, int FirstVisibleLine) state)
     {
         _isUndoingRedoing = true;
-        editorTextBox.Text = state.Text;
-        editorTextBox.SelectionStart = Math.Min(state.SelectionStart, editorTextBox.Text.Length);
-        editorTextBox.ScrollToCaret();
+
+        // テキスト書き換え前に現在のスクロール位置を取得
+        int currentFirstVisibleLine = (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero);
+
+        // 描画を一時停止してちらつきを防止
+        SendMessage(editorTextBox.Handle, WM_SETREDRAW, 0, IntPtr.Zero);
+        try
+        {
+            editorTextBox.Text = state.Text;
+            editorTextBox.SelectionStart = Math.Min(state.SelectionStart, editorTextBox.Text.Length);
+
+            // Text代入後はスクロールが0行目にリセットされるため、元の位置まで相対移動
+            // ScrollToCaret() は画面下端ジャンプの原因になるため使用しない
+            SendMessage(editorTextBox.Handle, EM_LINESCROLL, 0, (IntPtr)currentFirstVisibleLine);
+        }
+        finally
+        {
+            // 描画を再開して一度だけ再描画（ちらつきなし）
+            SendMessage(editorTextBox.Handle, WM_SETREDRAW, 1, IntPtr.Zero);
+            editorTextBox.Invalidate();
+            editorTextBox.Update();
+        }
+
         _isUndoingRedoing = false;
+
+        // 同期スクロールバーを更新（UpdateSyncFromEditor はスクロール位置を上書きするため呼ばない）
+        UpdateSyncScrollBar();
     }
 
     private void UpdateEditMenu()
@@ -355,10 +563,106 @@ public partial class Form1 : Form
             e.SuppressKeyPress = true;
             Redo();
         }
-        else if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter || e.KeyCode == Keys.Tab)
+        else if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter)
         {
             RecordUndoState();
         }
+        else if (e.KeyCode == Keys.Tab)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            ProcessTab(e.Shift);
+        }
+    }
+
+    private void ProcessTab(bool shift)
+    {
+        int start = editorTextBox.SelectionStart;
+        int length = editorTextBox.SelectionLength;
+
+        // もし選択範囲がなく、かつShiftが押されていない場合は通常のタブ挿入
+        if (length == 0 && !shift)
+        {
+            RecordUndoState();
+            editorTextBox.SelectedText = "\t";
+            return;
+        }
+
+        int startLine = editorTextBox.GetLineFromCharIndex(start);
+        int endChar = start + length;
+        int endLine = editorTextBox.GetLineFromCharIndex(endChar);
+
+        // 範囲選択の末尾が次の行の先頭にある場合、その最終行は選択に含めない（一般的なエディタの挙動）
+        if (length > 0 && editorTextBox.GetFirstCharIndexFromLine(endLine) == endChar)
+        {
+            endLine--;
+        }
+
+        if (startLine > endLine) return;
+
+        RecordUndoState();
+
+        int startPos = editorTextBox.GetFirstCharIndexFromLine(startLine);
+        int lastLineEndPos = (endLine + 1 < editorTextBox.Lines.Length)
+            ? editorTextBox.GetFirstCharIndexFromLine(endLine + 1)
+            : editorTextBox.TextLength;
+
+        string[] currentLines = editorTextBox.Lines;
+        StringBuilder sb = new StringBuilder();
+
+        for (int i = startLine; i <= endLine; i++)
+        {
+            string line = currentLines[i];
+            if (shift)
+            {
+                // インデント解除
+                if (line.StartsWith("\t"))
+                {
+                    line = line.Substring(1);
+                }
+                else if (line.StartsWith(" "))
+                {
+                    int spaceCount = 0;
+                    while (spaceCount < _currentTabWidth && spaceCount < line.Length && line[spaceCount] == ' ')
+                    {
+                        spaceCount++;
+                    }
+                    line = line.Substring(spaceCount);
+                }
+            }
+            else
+            {
+                // インデント追加
+                line = "\t" + line;
+            }
+            sb.Append(line);
+            
+            // 最後の行であっても、元々改行があった場合は付与する必要がある
+            // TextBox.Lines は改行を含まないが、SelectedText で全行置換する場合は
+            // 範囲内の各行末に改行が必要。
+            // 最後の行以前、またはファイル末尾ではない場合
+            if (i < currentLines.Length - 1)
+            {
+                sb.Append("\r\n");
+            }
+        }
+
+        // 選択範囲を全行分に拡大
+        editorTextBox.SelectionStart = startPos;
+        editorTextBox.SelectionLength = lastLineEndPos - startPos;
+        
+        string newText = sb.ToString();
+        // ファイル末尾の選択で、元々末尾に空行があった場合の調整
+        if (lastLineEndPos == editorTextBox.TextLength && editorTextBox.Text.EndsWith("\r\n") && !newText.EndsWith("\r\n"))
+        {
+            // newText += "\r\n"; // 必要に応じて
+        }
+
+        editorTextBox.SelectedText = newText;
+
+        // 選択範囲を保持
+        editorTextBox.SelectionStart = startPos;
+        editorTextBox.SelectionLength = newText.Length;
     }
 
     private Encoding DetectEncoding(string filePath)
@@ -451,7 +755,14 @@ public partial class Form1 : Form
     private void ApplyWordWrap(bool enabled)
     {
         editorTextBox.WordWrap = enabled;
-        editorTextBox.ScrollBars = enabled ? ScrollBars.Vertical : ScrollBars.Both;
+        if (syncedScrollToolStripMenuItem.Checked)
+        {
+            editorTextBox.ScrollBars = ScrollBars.None;
+        }
+        else
+        {
+            editorTextBox.ScrollBars = enabled ? ScrollBars.Vertical : ScrollBars.Both;
+        }
     }
 
     private void UpdateWindowTitle()
@@ -631,6 +942,35 @@ public partial class Form1 : Form
                 """;
             previewWebView.CoreWebView2.ExecuteScriptAsync(script);
         }
+
+        // スクロールイベントの登録（連動用）
+        if (syncedScrollToolStripMenuItem.Checked)
+        {
+            previewWebView.CoreWebView2.ExecuteScriptAsync("""
+                (function() {
+                    if (!window.hasScrollBound) {
+                        window.addEventListener('scroll', function() {
+                            if (window.isInternalScrolling) {
+                                window.isInternalScrolling = false;
+                                return;
+                            }
+                            var height = document.body.scrollHeight - window.innerHeight;
+                            var ratio = height <= 0 ? 0 : window.scrollY / height;
+                            window.chrome.webview.postMessage(ratio.toString());
+                        });
+                        window.hasScrollBound = true;
+                    }
+                    // 連動時はスクロールバーを隠すCSSを再適用
+                    var styleId = 'kagami-scroll-hide';
+                    if (!document.getElementById(styleId)) {
+                        var style = document.createElement('style');
+                        style.id = styleId;
+                        style.innerHTML = '*::-webkit-scrollbar { display: none !important; } body { -ms-overflow-style: none !important; scrollbar-width: none !important; }';
+                        document.head.appendChild(style);
+                    }
+                })()
+                """);
+        }
     }
 
     private void ConfigurePreviewResourceMapping()
@@ -662,9 +1002,15 @@ public partial class Form1 : Form
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, int[] lParam);
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, int[]? lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, IntPtr lParam);
 
     private const int EM_SETTABSTOPS = 0x00CB;
+    private const int EM_LINESCROLL = 0x00B6;
+    private const int EM_GETFIRSTVISIBLELINE = 0x00CE;
+    private const int WM_SETREDRAW = 0x000B;
 
     private void SetTabWidth(int tabWidth)
     {
@@ -768,5 +1114,57 @@ public partial class Form1 : Form
         RecordUndoState();
         var table = "|Title1|Title2|Title3|\r\n|---|---|---|\r\n|aaa|aaa|aaa|\r\n|aaa|aaa|aaa|";
         editorTextBox.SelectedText = table;
+    }
+
+    private void InsertTextColorTemplate()
+    {
+        RecordUndoState();
+        var start = editorTextBox.SelectionStart;
+        var len = editorTextBox.SelectionLength;
+        var selected = editorTextBox.SelectedText;
+        
+        var prefix = "<span style=\"color:red\">";
+        var suffix = "</span>";
+        
+        editorTextBox.SelectedText = $"{prefix}{selected}{suffix}";
+        
+        if (len == 0)
+        {
+            // 選択範囲がなかった場合は、タグの間にカーソルを移動
+            editorTextBox.SelectionStart = start + prefix.Length;
+        }
+        else
+        {
+            // 選択範囲があった場合は、タグ全体を選択するか、末尾に移動するか
+            // ここではタグも含めた全体を選択状態にする（再度色を変えたり削除したりしやすくするため）
+            editorTextBox.SelectionStart = start;
+            editorTextBox.SelectionLength = prefix.Length + len + suffix.Length;
+        }
+    }
+
+    private void InsertLinkTemplate()
+    {
+        RecordUndoState();
+        var start = editorTextBox.SelectionStart;
+        var len = editorTextBox.SelectionLength;
+        var selected = editorTextBox.SelectedText;
+
+        if (len == 0)
+        {
+            var text = "[リンクのテキスト](リンクのアドレス \"リンクのタイトル\")";
+            editorTextBox.SelectedText = text;
+            // 「リンクのテキスト」部分を選択（1文字目から7文字分）
+            editorTextBox.SelectionStart = start + 1;
+            editorTextBox.SelectionLength = 7;
+        }
+        else
+        {
+            var prefix = "[";
+            var middle = "](リンクのアドレス \"リンクのタイトル\")";
+            editorTextBox.SelectedText = $"{prefix}{selected}{middle}";
+            // 「リンクのアドレス」部分を選択状態にする
+            editorTextBox.SelectionStart = start + prefix.Length + len + 2; // "[" + text + "]("
+            editorTextBox.SelectionLength = 8; // "リンクのアドレス"
+        }
     }
 }
