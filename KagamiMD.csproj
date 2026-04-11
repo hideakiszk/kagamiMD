@@ -8,15 +8,21 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <SelfContained>false</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
+    <UseAppHost>true</UseAppHost>
     <IncludeNativeLibrariesForSelfContained>true</IncludeNativeLibrariesForSelfContained>
+    <PublishDir>publish\</PublishDir>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
     <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
     <ApplicationIcon>KagamiMD.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Update="KagamiMD.ico">
+    <EmbeddedResource Include="KagamiMD.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="wwwroot\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="KagamiMD.Tests\**" />

@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="tui-editor.bundle.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #ffffff;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        /* Toast UI Editor Content Styling to match Markdig Preview */
+        .toastui-editor-contents {
+            font-family: 'Segoe UI', sans-serif !important;
+            padding: 24px !important; /* body margin 24px in preview */
+            line-height: 1.65 !important;
+            color: #1f2937 !important;
+        }
+        .toastui-editor-contents h1, 
+        .toastui-editor-contents h2, 
+        .toastui-editor-contents h3, 
+        .toastui-editor-contents h4, 
+        .toastui-editor-contents h5, 
+        .toastui-editor-contents h6 { 
+            line-height: 1.25 !important; 
+            margin-top: 1.2em !important; 
+            border-bottom: none !important; /* Remove Toast UI default underslines */
+            padding-bottom: 0 !important;
+            font-weight: 600 !important;
+        }
+        .toastui-editor-contents h1 { font-size: 2em !important; }
+        .toastui-editor-contents h2 { font-size: 1.5em !important; }
+        .toastui-editor-contents h3 { font-size: 1.17em !important; }
+
+        .toastui-editor-contents pre { 
+            background: #f3f4f6 !important; 
+            padding: 16px !important; 
+            border-radius: 8px !important; 
+        }
+        .toastui-editor-contents code { 
+            background: #f3f4f6 !important; 
+            padding: 0 4px !important; 
+            border-radius: 4px !important; 
+            font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace !important;
+        }
+        .toastui-editor-contents blockquote { 
+            margin: 1em 0 !important; 
+            padding: 0 16px !important; 
+            border-left: 4px solid #cbd5e1 !important; 
+            color: #475569 !important; 
+        }
+        .toastui-editor-contents table { 
+            border-collapse: collapse !important; 
+            width: 100% !important; 
+            border: none !important;
+        }
+        .toastui-editor-contents th, 
+        .toastui-editor-contents td { 
+            border: 1px solid #d1d5db !important; 
+            padding: 8px 10px !important; 
+            background-color: transparent !important; /* Remove Dark Header background */
+            color: #1f2937 !important; /* Ensure text is visible (black/dark gray) */
+        }
+        .toastui-editor-contents th,
+        .toastui-editor-contents th * {
+            color: #1f2937 !important; /* Force children (spans, etc.) to be visible */
+            font-weight: bold !important;
+        }
+        .toastui-editor-contents img { 
+            max-width: 100% !important; 
+        }
+
+        #error-log { color: red; margin: 10px; font-family: sans-serif; display: none; }
+    </style>
+</head>
+<body>
+    <div id="error-log"></div>
+    <div id="editor"></div>
+    <script>
+        window.onerror = function(msg, url, line, col, error) {
+            document.getElementById('error-log').style.display = 'block';
+            document.getElementById('error-log').innerText += msg + '\n';
+        };
+    </script>
+    <script src="tui-editor.bundle.js" onerror="window.onerror('Failed to load tui-editor.bundle.js')"></script>
+    <script>
+        // Init happens from C# via ExecuteScriptAsync
+        window.initWysiwygEditorFromCSharp = function(markdown) {
+            if (window.initWysiwygEditor) {
+                try {
+                    window.initWysiwygEditor('editor', markdown);
+                } catch (e) {
+                    window.onerror('Init error: ' + e.message);
+                }
+            } else {
+                window.onerror("Editor bundle not loaded completely");
+            }
+        };
+    </script>
+</body>
+</html>

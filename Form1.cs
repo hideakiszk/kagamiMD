@@ -1,32 +1,37 @@
-using Markdig;
 using Microsoft.Web.WebView2.Core;
-using System.Runtime.InteropServices;
 using System.Text;
+using KagamiMD.Configuration;
+using KagamiMD.Interop;
+using KagamiMD.Services;
 
 namespace KagamiMD;
 
 public partial class Form1 : Form
 {
-    private readonly MarkdownPipeline pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+    private readonly DocumentService _documentService = new DocumentService();
+    private readonly MarkdownPreviewService _previewService = new MarkdownPreviewService();
+    private readonly ScrollSyncCoordinator _scrollSyncCoordinator = new ScrollSyncCoordinator();
+
     private bool previewReady;
     private bool _previewInitialized;
     private string? currentFilePath;
     private int _currentTabWidth = 4;
     private bool _isModified;
+    private bool _isSyncingFromWysiwyg;
     private SearchReplaceForm? _searchReplaceForm;
     private readonly UndoManager _undoManager = new UndoManager();
     private bool _isUndoingRedoing;
     private readonly System.Windows.Forms.Timer _undoTimer = new System.Windows.Forms.Timer();
-    private List<string> _fileHistory = new List<string>();
 
     public Form1()
     {
         InitializeComponent();
         try
         {
-            if (File.Exists("KagamiMD.ico"))
+            using var iconStream = typeof(Form1).Assembly.GetManifestResourceStream("KagamiMD.KagamiMD.ico");
+            if (iconStream != null)
             {
-                this.Icon = new Icon("KagamiMD.ico");
+                this.Icon = new Icon(iconStream);
             }
         }
         catch { }
@@ -65,7 +70,7 @@ public partial class Form1 : Form
 
             previewWebView.CoreWebView2.NavigationStarting += (sender, e) => 
             {
-                if (e.IsUserInitiated && (e.Uri.StartsWith("http://") || e.Uri.StartsWith("https://")) && !e.Uri.StartsWith("https://markdown-preview/"))
+                if (e.IsUserInitiated && (e.Uri.StartsWith("http://") || e.Uri.StartsWith("https://")) && !e.Uri.StartsWith("https://markdown-preview/") && !e.Uri.StartsWith("https://kagami-assets/"))
                 {
                     e.Cancel = true;
                     try
@@ -78,7 +83,7 @@ public partial class Form1 : Form
 
             previewWebView.CoreWebView2.NewWindowRequested += (sender, e) => 
             {
-                if ((e.Uri.StartsWith("http://") || e.Uri.StartsWith("https://")) && !e.Uri.StartsWith("https://markdown-preview/"))
+                if ((e.Uri.StartsWith("http://") || e.Uri.StartsWith("https://")) && !e.Uri.StartsWith("https://markdown-preview/") && !e.Uri.StartsWith("https://kagami-assets/"))
                 {
                     e.Handled = true;
                     try
@@ -118,6 +123,7 @@ public partial class Form1 : Form
         showBothToolStripMenuItem.Click += (_, _) => SelectDisplayMode(true, true);
         showLeftOnlyToolStripMenuItem.Click += (_, _) => SelectDisplayMode(true, false);
         showRightOnlyToolStripMenuItem.Click += (_, _) => SelectDisplayMode(false, true);
+        wysiwygToolStripMenuItem.CheckedChanged += WysiwygToolStripMenuItem_CheckedChanged;
         independentScrollToolStripMenuItem.Click += (_, _) => SelectScrollMode(false);
         syncedScrollToolStripMenuItem.Click += (_, _) => SelectScrollMode(true);
         syncVScrollBar.Scroll += SyncVScrollBar_Scroll;
@@ -131,7 +137,7 @@ public partial class Form1 : Form
 
         editorTextBox.KeyDown += EditorTextBox_KeyDown;
         // 初期状態を記録
-        _undoManager.Clear(editorTextBox.Text, 0, (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero));
+        _undoManager.Clear(editorTextBox.Text, 0, EditorInterop.GetFirstVisibleLine(editorTextBox.Handle));
 
         editorTextBox.TextChanged += (_, _) => 
         {
@@ -142,7 +148,15 @@ public partial class Form1 : Form
             }
             if (realtimePreviewToolStripMenuItem.Checked)
             {
-                UpdatePreview();
+                if (wysiwygToolStripMenuItem.Checked && !_isSyncingFromWysiwyg)
+                {
+                    var escapedMarkdown = System.Text.Json.JsonSerializer.Serialize(editorTextBox.Text ?? string.Empty);
+                    previewWebView.CoreWebView2?.ExecuteScriptAsync($"if(window.updateWysiwygEditor) window.updateWysiwygEditor({escapedMarkdown});");
+                }
+                else if (!wysiwygToolStripMenuItem.Checked)
+                {
+                    UpdatePreview();
+                }
             }
 
             if (!_isUndoingRedoing)
@@ -157,16 +171,22 @@ public partial class Form1 : Form
         editorTextBox.MouseDown += (_, _) => UpdateSyncFromEditor();
         editorTextBox.MouseWheel += EditorTextBox_MouseWheel;
 
-        previewWebView.NavigationCompleted += (_, _) => UpdateSyncScrollBar();
+        previewWebView.NavigationCompleted += (_, _) => {
+            UpdateSyncScrollBar();
+            if (wysiwygToolStripMenuItem.Checked && _previewInitialized)
+            {
+                var escapedMarkdown = System.Text.Json.JsonSerializer.Serialize(editorTextBox.Text ?? string.Empty);
+                previewWebView.CoreWebView2?.ExecuteScriptAsync($"if(window.initWysiwygEditorFromCSharp) window.initWysiwygEditorFromCSharp({escapedMarkdown});");
+            }
+        };
 
         FormClosing += Form1_FormClosing;
 
-        // Load settings from INI
-        SettingsManager.LoadSettings(out var loadedTabWidth, out var loadedFont, out var loadedRealTime, out var loadedHistory, editorTextBox.Font);
-        editorTextBox.Font = loadedFont;
-        SetTabWidth(loadedTabWidth);
-        SetPreviewMode(loadedRealTime);
-        _fileHistory = loadedHistory;
+        // Load settings from AppConfig
+        SettingsManager.LoadSettings(editorTextBox.Font);
+        editorTextBox.Font = SettingsManager.Current.EditorFont;
+        SetTabWidth(SettingsManager.Current.TabWidth);
+        SetPreviewMode(SettingsManager.Current.RealTimePreview);
         UpdateFileMenuHistory();
     }
 
@@ -179,6 +199,13 @@ public partial class Form1 : Form
         {
             UpdatePreview();
         }
+    }
+
+    private void WysiwygToolStripMenuItem_CheckedChanged(object? sender, EventArgs e)
+    {
+        editorTextBox.ReadOnly = wysiwygToolStripMenuItem.Checked;
+        _previewInitialized = false;
+        UpdatePreview();
     }
 
     private void EditorTextBox_DragEnter(object? sender, DragEventArgs e)
@@ -245,23 +272,11 @@ public partial class Form1 : Form
         if (synced)
         {
             UpdateSyncScrollBar();
-            // WebView2のスクロールバーを表示させたまま、CSSで隠す（ホイール入力を有効にするため）
-            previewWebView.CoreWebView2?.ExecuteScriptAsync("""
-                (function() {
-                    var styleId = 'kagami-scroll-hide';
-                    if (!document.getElementById(styleId)) {
-                        var style = document.createElement('style');
-                        style.id = styleId;
-                        style.innerHTML = '*::-webkit-scrollbar { display: none !important; } body { -ms-overflow-style: none !important; scrollbar-width: none !important; }';
-                        document.head.appendChild(style);
-                    }
-                })()
-                """);
+            previewWebView.CoreWebView2?.ExecuteScriptAsync(ScrollSyncCoordinator.ScrollHideScript);
         }
         else
         {
-            // CSSを削除してスクロールバーを表示する
-            previewWebView.CoreWebView2?.ExecuteScriptAsync("var s = document.getElementById('kagami-scroll-hide'); if (s) s.remove();");
+            previewWebView.CoreWebView2?.ExecuteScriptAsync(ScrollSyncCoordinator.ScrollShowScript);
         }
     }
 
@@ -301,24 +316,60 @@ public partial class Form1 : Form
 
     private void PreviewWebView_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        if (!syncedScrollToolStripMenuItem.Checked) return;
-
         try
         {
-            var ratioStr = e.TryGetWebMessageAsString();
-            if (double.TryParse(ratioStr, out double ratio))
+            var msgStr = e.TryGetWebMessageAsString();
+
+            if (wysiwygToolStripMenuItem.Checked)
             {
-                int range = Math.Max(0, syncVScrollBar.Maximum - syncVScrollBar.LargeChange + 1);
-                int lineIndex = (int)(range * ratio);
+                if (_isSyncingFromWysiwyg) return;
                 
-                if (syncVScrollBar.Value != lineIndex)
+                if (msgStr != null)
                 {
-                    syncVScrollBar.Value = lineIndex;
-                    // エディタ側のみ同期（WebView側は自身ですでに移動済みのため、ループを防ぐ）
-                    int firstVisibleLine = (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero);
-                    int diff = lineIndex - firstVisibleLine;
-                    SendMessage(editorTextBox.Handle, EM_LINESCROLL, 0, (IntPtr)diff);
+                    // WinForms TextBox requires CRLF for proper newline rendering
+                    msgStr = msgStr.Replace("\r\n", "\n").Replace("\n", "\r\n");
+                    
+                    if (editorTextBox.Text != msgStr)
+                    {
+                        int currentLine = EditorInterop.GetFirstVisibleLine(editorTextBox.Handle);
+                        _isSyncingFromWysiwyg = true;
+                        EditorInterop.SuspendDrawing(editorTextBox.Handle);
+                        try
+                        {
+                            editorTextBox.Text = msgStr;
+                            EditorInterop.ScrollLines(editorTextBox.Handle, currentLine);
+                            
+                            if (!_isModified)
+                            {
+                                _isModified = true;
+                                UpdateWindowTitle();
+                            }
+                        
+                        if (!_isUndoingRedoing)
+                        {
+                            _undoTimer.Stop();
+                            _undoTimer.Start();
+                        }
+                    }
+                    finally
+                    {
+                        EditorInterop.ResumeDrawing(editorTextBox.Handle);
+                        editorTextBox.Invalidate();
+                        editorTextBox.Update();
+                        _isSyncingFromWysiwyg = false;
+                    }
+                    }
+                    return;
                 }
+            }
+
+            if (!syncedScrollToolStripMenuItem.Checked) return;
+
+            if (double.TryParse(msgStr, out double ratio))
+            {
+                int val = syncVScrollBar.Value;
+                _scrollSyncCoordinator.SyncEditorToRatio(editorTextBox.Handle, ratio, syncVScrollBar.Maximum, syncVScrollBar.LargeChange, ref val);
+                syncVScrollBar.Value = val;
             }
         }
         catch { }
@@ -328,7 +379,7 @@ public partial class Form1 : Form
     {
         if (!syncedScrollToolStripMenuItem.Checked) return;
 
-        int firstVisibleLine = (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero);
+        int firstVisibleLine = EditorInterop.GetFirstVisibleLine(editorTextBox.Handle);
         
         // 最大値を超えないように制限
         int range = Math.Max(0, syncVScrollBar.Maximum - syncVScrollBar.LargeChange + 1);
@@ -337,38 +388,21 @@ public partial class Form1 : Form
         if (syncVScrollBar.Value != constrainedLine)
         {
             syncVScrollBar.Value = constrainedLine;
-            SyncWebViewToLine(constrainedLine);
+            SyncWebViewToRatio((double)constrainedLine / Math.Max(1, range));
         }
     }
 
     private void SyncToLineIndex(int lineIndex)
     {
-        // エディタをスクロール
-        int firstVisibleLine = (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero);
-        int diff = lineIndex - firstVisibleLine;
-        SendMessage(editorTextBox.Handle, EM_LINESCROLL, 0, (IntPtr)diff);
-
-        // プレビューをスクロール
-        SyncWebViewToLine(lineIndex);
+        _scrollSyncCoordinator.SyncToLineIndex(editorTextBox.Handle, lineIndex, out double ratio, syncVScrollBar.Maximum, syncVScrollBar.LargeChange);
+        SyncWebViewToRatio(ratio);
     }
 
-    private async void SyncWebViewToLine(int lineIndex)
+    private async void SyncWebViewToRatio(double ratio)
     {
         if (previewWebView.CoreWebView2 != null)
         {
-            // 割合計算
-            double range = Math.Max(1, syncVScrollBar.Maximum - syncVScrollBar.LargeChange + 1);
-            double ratio = (double)lineIndex / range;
-            
-            // WebView上の高さを取得してスクロール
-            // 無限ループを防ぐため、JS側で一時的にイベントを無効化する
-            string script = $$"""
-                (function() {
-                    var height = document.body.scrollHeight - window.innerHeight;
-                    window.isInternalScrolling = true;
-                    window.scrollTo(0, Math.max(0, height * {{ratio}}));
-                })()
-                """;
+            string script = ScrollSyncCoordinator.BuildWebViewScrollScript(ratio);
             await previewWebView.CoreWebView2.ExecuteScriptAsync(script);
         }
     }
@@ -407,8 +441,9 @@ public partial class Form1 : Form
         if (!File.Exists(filePath))
         {
             MessageBox.Show(this, $"ファイルが見つかりません:\n{filePath}", "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            _fileHistory.RemoveAll(x => string.Equals(x, filePath, StringComparison.OrdinalIgnoreCase));
-            SettingsManager.SaveFileHistory(_fileHistory);
+            var history = SettingsManager.Current.FileHistory ?? new List<string>();
+            history.RemoveAll(x => string.Equals(x, filePath, StringComparison.OrdinalIgnoreCase));
+            SettingsManager.SaveFileHistory(history);
             UpdateFileMenuHistory();
             return;
         }
@@ -416,13 +451,13 @@ public partial class Form1 : Form
         currentFilePath = filePath;
         _previewInitialized = false;
         previewWebView.CoreWebView2?.ExecuteScriptAsync("sessionStorage.removeItem('previewScrollPos');");
-        var detectedEncoding = DetectEncoding(currentFilePath);
+        var content = _documentService.ReadFile(currentFilePath, out var detectedEncoding);
         UpdateEncodingMenu(detectedEncoding);
-        editorTextBox.Text = NormalizeLineEndings(File.ReadAllText(currentFilePath, detectedEncoding), "\r\n");
+        editorTextBox.Text = content;
         editorTextBox.SelectionStart = 0;
         editorTextBox.SelectionLength = 0;
         _isModified = false;
-        _undoManager.Clear(editorTextBox.Text, 0, (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero)); // 履歴をリセット
+        _undoManager.Clear(editorTextBox.Text, 0, EditorInterop.GetFirstVisibleLine(editorTextBox.Handle));
         UpdatePreview();
         UpdateWindowTitle();
         AddToHistory(currentFilePath);
@@ -432,35 +467,27 @@ public partial class Form1 : Form
     {
         if (string.IsNullOrEmpty(filePath)) return;
 
-        // 既存のリストから削除して先頭に追加する (LRU)
-        _fileHistory.RemoveAll(x => string.Equals(x, filePath, StringComparison.OrdinalIgnoreCase));
-        _fileHistory.Insert(0, filePath);
-
-        // 10個を超えたら古いものを削除
-        if (_fileHistory.Count > 10)
-        {
-            _fileHistory.RemoveRange(10, _fileHistory.Count - 10);
-        }
-
-        SettingsManager.SaveFileHistory(_fileHistory);
+        var history = SettingsManager.Current.FileHistory ?? new List<string>();
+        history.RemoveAll(x => string.Equals(x, filePath, StringComparison.OrdinalIgnoreCase));
+        history.Insert(0, filePath);
+        SettingsManager.SaveFileHistory(history);
         UpdateFileMenuHistory();
     }
 
     private void UpdateFileMenuHistory()
     {
-        // 既存の履歴アイテムを削除
-        // 最初の6個（開く、保存、名前保存、PDF保存、文字コード、改行コード）は残す
         while (fileToolStripMenuItem.DropDownItems.Count > 6)
         {
             fileToolStripMenuItem.DropDownItems.RemoveAt(6);
         }
 
-        if (_fileHistory.Count > 0)
+        var history = SettingsManager.Current.FileHistory;
+        if (history != null && history.Count > 0)
         {
             fileToolStripMenuItem.DropDownItems.Add(new ToolStripSeparator());
-            for (int i = 0; i < _fileHistory.Count; i++)
+            for (int i = 0; i < history.Count; i++)
             {
-                var path = _fileHistory[i];
+                var path = history[i];
                 var menuItem = new ToolStripMenuItem($"{i + 1}: {path}");
                 menuItem.Click += (s, e) => OpenFile(path);
                 fileToolStripMenuItem.DropDownItems.Add(menuItem);
@@ -471,7 +498,7 @@ public partial class Form1 : Form
     private void RecordUndoState()
     {
         if (_isUndoingRedoing) return;
-        int firstVisibleLine = (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero);
+        int firstVisibleLine = EditorInterop.GetFirstVisibleLine(editorTextBox.Handle);
         _undoManager.RecordState(editorTextBox.Text, editorTextBox.SelectionStart, firstVisibleLine);
     }
 
@@ -510,23 +537,22 @@ public partial class Form1 : Form
         _isUndoingRedoing = true;
 
         // テキスト書き換え前に現在のスクロール位置を取得
-        int currentFirstVisibleLine = (int)SendMessage(editorTextBox.Handle, EM_GETFIRSTVISIBLELINE, 0, IntPtr.Zero);
+        int currentFirstVisibleLine = EditorInterop.GetFirstVisibleLine(editorTextBox.Handle);
 
         // 描画を一時停止してちらつきを防止
-        SendMessage(editorTextBox.Handle, WM_SETREDRAW, 0, IntPtr.Zero);
+        EditorInterop.SuspendDrawing(editorTextBox.Handle);
         try
         {
             editorTextBox.Text = state.Text;
             editorTextBox.SelectionStart = Math.Min(state.SelectionStart, editorTextBox.Text.Length);
 
             // Text代入後はスクロールが0行目にリセットされるため、元の位置まで相対移動
-            // ScrollToCaret() は画面下端ジャンプの原因になるため使用しない
-            SendMessage(editorTextBox.Handle, EM_LINESCROLL, 0, (IntPtr)currentFirstVisibleLine);
+            EditorInterop.ScrollLines(editorTextBox.Handle, currentFirstVisibleLine);
         }
         finally
         {
             // 描画を再開して一度だけ再描画（ちらつきなし）
-            SendMessage(editorTextBox.Handle, WM_SETREDRAW, 1, IntPtr.Zero);
+            EditorInterop.ResumeDrawing(editorTextBox.Handle);
             editorTextBox.Invalidate();
             editorTextBox.Update();
         }
@@ -665,34 +691,7 @@ public partial class Form1 : Form
         editorTextBox.SelectionLength = newText.Length;
     }
 
-    private Encoding DetectEncoding(string filePath)
-    {
-        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read);
 
-        // 1. Check for UTF-8 BOM
-        byte[] bom = new byte[4];
-        int read = fs.Read(bom, 0, 4);
-        fs.Position = 0;
-
-        if (read >= 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF)
-        {
-            return new UTF8Encoding(true);
-        }
-
-        // 2. Try strict UTF-8
-        try
-        {
-            var utf8Strict = new UTF8Encoding(false, true);
-            using var reader = new StreamReader(fs, utf8Strict, false, 1024, true);
-            reader.ReadToEnd();
-            return new UTF8Encoding(false);
-        }
-        catch (DecoderFallbackException)
-        {
-            // Fallback to Shift-JIS
-            return Encoding.GetEncoding("shift_jis");
-        }
-    }
 
     private void UpdateEncodingMenu(Encoding encoding)
     {
@@ -792,8 +791,7 @@ public partial class Form1 : Form
 
     private void WriteFile(string filePath)
     {
-        var text = NormalizeLineEndings(editorTextBox.Text ?? string.Empty, GetSelectedLineEnding());
-        File.WriteAllText(filePath, text, GetSelectedEncoding());
+        _documentService.WriteFile(filePath, editorTextBox.Text ?? string.Empty, GetSelectedEncoding(), GetSelectedLineEnding());
     }
 
     private Encoding GetSelectedEncoding()
@@ -813,11 +811,7 @@ public partial class Form1 : Form
         return lfToolStripMenuItem.Checked ? "\n" : "\r\n";
     }
 
-    private static string NormalizeLineEndings(string text, string lineEnding)
-    {
-        var normalized = text.Replace("\r\n", "\n").Replace("\r", "\n");
-        return lineEnding == "\n" ? normalized : normalized.Replace("\n", lineEnding);
-    }
+
 
     private void UpdatePreview()
     {
@@ -826,199 +820,56 @@ public partial class Form1 : Form
             return;
         }
 
-        ConfigurePreviewResourceMapping();
-        var htmlBody = Markdown.ToHtml(editorTextBox.Text ?? string.Empty, pipeline);
+        var directoryPath = _previewService.GetPreviewBaseDirectoryPath(currentFilePath);
+        previewWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+            "markdown-preview",
+            directoryPath,
+            CoreWebView2HostResourceAccessKind.Allow);
+
+        var assetsPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+        previewWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+            "kagami-assets",
+            assetsPath,
+            CoreWebView2HostResourceAccessKind.Allow);
+
+        if (wysiwygToolStripMenuItem.Checked)
+        {
+            if (!_previewInitialized)
+            {
+                previewWebView.CoreWebView2.Navigate("https://kagami-assets/wysiwyg.html");
+                _previewInitialized = true;
+            }
+            else
+            {
+                // The editor is already initialized and visible, just send updates
+                var escapedMarkdown = System.Text.Json.JsonSerializer.Serialize(editorTextBox.Text ?? string.Empty);
+                previewWebView.CoreWebView2.ExecuteScriptAsync($"if(window.updateWysiwygEditor) window.updateWysiwygEditor({escapedMarkdown});");
+            }
+            return;
+        }
 
         if (!_previewInitialized)
         {
-            var html = $$"""
-                <!doctype html>
-                <html>
-                <head>
-                    <meta charset="utf-8" />
-                    <meta name="viewport" content="width=device-width, initial-scale=1" />
-                    <base href="{{GetPreviewBaseHref()}}" />
-                    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-                    <style>
-                        body {
-                            font-family: 'Segoe UI', sans-serif;
-                            margin: 24px;
-                            line-height: 1.65;
-                            color: #1f2937;
-                            background: #ffffff;
-                        }
-
-                        h1, h2, h3, h4, h5, h6 {
-                            line-height: 1.25;
-                            margin-top: 1.2em;
-                        }
-
-                        pre {
-                            background: #f3f4f6;
-                            padding: 16px;
-                            border-radius: 8px;
-                            overflow: auto;
-                        }
-
-                        code {
-                            background: #f3f4f6;
-                            padding: 0 4px;
-                            border-radius: 4px;
-                        }
-
-                        blockquote {
-                            margin: 1em 0;
-                            padding: 0 16px;
-                            border-left: 4px solid #cbd5e1;
-                            color: #475569;
-                        }
-
-                        table {
-                            border-collapse: collapse;
-                            width: 100%;
-                        }
-
-                        th, td {
-                            border: 1px solid #d1d5db;
-                            padding: 8px 10px;
-                        }
-
-                        img {
-                            max-width: 100%;
-                        }
-                    </style>
-                </head>
-                <body>
-                <div id="content">{{htmlBody}}</div>
-                <script>
-                    // Restore scroll position
-                    const scrollPos = sessionStorage.getItem('previewScrollPos');
-                    if (scrollPos) {
-                        window.scrollTo(0, parseInt(scrollPos, 10));
-                    }
-
-                    // Save scroll position
-                    window.addEventListener('scroll', () => {
-                        sessionStorage.setItem('previewScrollPos', window.scrollY);
-                    });
-
-                    mermaid.initialize({
-                        startOnLoad: false,
-                        securityLevel: 'loose',
-                        theme: 'default'
-                    });
-
-                    function renderMermaid() {
-                        document.querySelectorAll('#content pre > code.language-mermaid').forEach((codeBlock) => {
-                            const parent = codeBlock.parentElement;
-                            const diagram = document.createElement('div');
-                            diagram.className = 'mermaid';
-                            diagram.textContent = codeBlock.textContent;
-                            parent.replaceWith(diagram);
-                        });
-                        mermaid.run();
-                    }
-
-                    renderMermaid();
-                </script>
-                </body>
-                </html>
-                """;
-
+            var html = _previewService.GenerateHtmlWrapper(editorTextBox.Text ?? string.Empty, "https://markdown-preview/");
             previewWebView.NavigateToString(html);
             _previewInitialized = true;
         }
         else
         {
-            var escapedHtml = System.Text.Json.JsonSerializer.Serialize(htmlBody);
-            var script = $$"""
-                var contentDiv = document.getElementById('content');
-                if (contentDiv) {
-                    contentDiv.innerHTML = {{escapedHtml}};
-                    if (typeof renderMermaid === 'function') {
-                        renderMermaid();
-                    }
-                }
-                """;
+            var script = _previewService.GenerateUpdateScript(editorTextBox.Text ?? string.Empty);
             previewWebView.CoreWebView2.ExecuteScriptAsync(script);
         }
 
-        // スクロールイベントの登録（連動用）
         if (syncedScrollToolStripMenuItem.Checked)
         {
-            previewWebView.CoreWebView2.ExecuteScriptAsync("""
-                (function() {
-                    if (!window.hasScrollBound) {
-                        window.addEventListener('scroll', function() {
-                            if (window.isInternalScrolling) {
-                                window.isInternalScrolling = false;
-                                return;
-                            }
-                            var height = document.body.scrollHeight - window.innerHeight;
-                            var ratio = height <= 0 ? 0 : window.scrollY / height;
-                            window.chrome.webview.postMessage(ratio.toString());
-                        });
-                        window.hasScrollBound = true;
-                    }
-                    // 連動時はスクロールバーを隠すCSSを再適用
-                    var styleId = 'kagami-scroll-hide';
-                    if (!document.getElementById(styleId)) {
-                        var style = document.createElement('style');
-                        style.id = styleId;
-                        style.innerHTML = '*::-webkit-scrollbar { display: none !important; } body { -ms-overflow-style: none !important; scrollbar-width: none !important; }';
-                        document.head.appendChild(style);
-                    }
-                })()
-                """);
+            previewWebView.CoreWebView2.ExecuteScriptAsync(ScrollSyncCoordinator.ScrollEventScript);
         }
     }
-
-    private void ConfigurePreviewResourceMapping()
-    {
-        var directoryPath = GetPreviewBaseDirectoryPath();
-        previewWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
-            "markdown-preview",
-            directoryPath,
-            CoreWebView2HostResourceAccessKind.Allow);
-    }
-
-    private string GetPreviewBaseHref()
-    {
-        return "https://markdown-preview/";
-    }
-
-    private string GetPreviewBaseDirectoryPath()
-    {
-        var directoryPath = !string.IsNullOrWhiteSpace(currentFilePath)
-            ? Path.GetDirectoryName(currentFilePath)
-            : AppContext.BaseDirectory;
-
-        if (string.IsNullOrWhiteSpace(directoryPath))
-        {
-            directoryPath = AppContext.BaseDirectory;
-        }
-
-        return Path.GetFullPath(directoryPath);
-    }
-
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, int[]? lParam);
-
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, IntPtr lParam);
-
-    private const int EM_SETTABSTOPS = 0x00CB;
-    private const int EM_LINESCROLL = 0x00B6;
-    private const int EM_GETFIRSTVISIBLELINE = 0x00CE;
-    private const int WM_SETREDRAW = 0x000B;
 
     private void SetTabWidth(int tabWidth)
     {
-        // 1 tab stops unit is 1/4 of the average character width.
-        // So for 4 characters, it's 4 * 4 = 16.
-        int[] tabStops = { tabWidth * 4 };
         _currentTabWidth = tabWidth;
-        SendMessage(editorTextBox.Handle, EM_SETTABSTOPS, 1, tabStops);
+        EditorInterop.SetTabWidth(editorTextBox.Handle, tabWidth);
         editorTextBox.Refresh();
         UpdateTabWidthMenu(tabWidth);
         SettingsManager.SaveTabWidth(tabWidth);

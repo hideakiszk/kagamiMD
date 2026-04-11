@@ -54,6 +54,7 @@ partial class Form1
     private System.Windows.Forms.VScrollBar syncVScrollBar;
     private System.Windows.Forms.TextBox editorTextBox;
     private Microsoft.Web.WebView2.WinForms.WebView2 previewWebView;
+    private System.Windows.Forms.ToolStripMenuItem wysiwygToolStripMenuItem;
 
     /// <summary>
     ///  Required designer variable.
@@ -134,6 +135,7 @@ partial class Form1
         this.syncVScrollBar = new System.Windows.Forms.VScrollBar();
         this.editorTextBox = new System.Windows.Forms.TextBox();
         this.previewWebView = new Microsoft.Web.WebView2.WinForms.WebView2();
+        this.wysiwygToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
         this.menuStrip1.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)(this.splitContainer1)).BeginInit();
         this.splitContainer1.Panel1.SuspendLayout();
@@ -227,6 +229,7 @@ partial class Form1
         this.lfToolStripMenuItem.Text = "LF";
         this.viewToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
         this.wordWrapToolStripMenuItem,
+        this.wysiwygToolStripMenuItem,
         this.previewToolStripMenuItem,
         this.previewUpdateToolStripMenuItem,
         this.displayContentToolStripMenuItem,
@@ -240,6 +243,13 @@ partial class Form1
         this.wordWrapToolStripMenuItem.Name = "wordWrapToolStripMenuItem";
         this.wordWrapToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
         this.wordWrapToolStripMenuItem.Text = "テキスト折り返し";
+        // 
+        // wysiwygToolStripMenuItem
+        // 
+        this.wysiwygToolStripMenuItem.CheckOnClick = true;
+        this.wysiwygToolStripMenuItem.Name = "wysiwygToolStripMenuItem";
+        this.wysiwygToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+        this.wysiwygToolStripMenuItem.Text = "WYSIWYGモード";
         // 
         // previewToolStripMenuItem
         // 
