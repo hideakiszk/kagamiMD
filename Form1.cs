@@ -22,6 +22,7 @@ public partial class Form1 : Form
     private readonly UndoManager _undoManager = new UndoManager();
     private bool _isUndoingRedoing;
     private readonly System.Windows.Forms.Timer _undoTimer = new System.Windows.Forms.Timer();
+    private readonly System.Windows.Forms.Timer _previewDebounceTimer = new System.Windows.Forms.Timer();
 
     public Form1()
     {
@@ -53,7 +54,13 @@ public partial class Form1 : Form
         previewUpdateToolStripMenuItem.Click += (_, _) => UpdatePreview();
         Shown += async (_, _) =>
         {
-            await previewWebView.EnsureCoreWebView2Async();
+            // EDR検知回避: WebView2のキャッシュを%LocalAppData%配下に配置し、
+            // 実行ファイルの隣にexe/dllが動的生成されるパターン（マルウェア誤検知の原因）を回避する
+            var userDataFolder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "KagamiMD", "WebView2");
+            var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+            await previewWebView.EnsureCoreWebView2Async(env);
             
             // Webブラウザ特有の操作を制限する
             var settings = previewWebView.CoreWebView2.Settings;
@@ -135,6 +142,22 @@ public partial class Form1 : Form
             RecordUndoState();
         };
 
+        // プレビュー更新のデバウンス（連続入力中の無駄なMarkdownパース+DOM更新を抑制）
+        _previewDebounceTimer.Interval = 300;
+        _previewDebounceTimer.Tick += (s, e) =>
+        {
+            _previewDebounceTimer.Stop();
+            if (wysiwygToolStripMenuItem.Checked && !_isSyncingFromWysiwyg)
+            {
+                var escapedMarkdown = System.Text.Json.JsonSerializer.Serialize(editorTextBox.Text ?? string.Empty);
+                previewWebView.CoreWebView2?.ExecuteScriptAsync($"if(window.updateWysiwygEditor) window.updateWysiwygEditor({escapedMarkdown});");
+            }
+            else if (!wysiwygToolStripMenuItem.Checked)
+            {
+                UpdatePreview();
+            }
+        };
+
         editorTextBox.KeyDown += EditorTextBox_KeyDown;
         // 初期状態を記録
         _undoManager.Clear(editorTextBox.Text, 0, EditorInterop.GetFirstVisibleLine(editorTextBox.Handle));
@@ -148,14 +171,16 @@ public partial class Form1 : Form
             }
             if (realtimePreviewToolStripMenuItem.Checked)
             {
-                if (wysiwygToolStripMenuItem.Checked && !_isSyncingFromWysiwyg)
+                // WYSIWYGからの同期中（JavaScript側がオリジンの変更）は、JS側へ送り返さないようにタイマーを開始しない
+                if (wysiwygToolStripMenuItem.Checked && _isSyncingFromWysiwyg)
                 {
-                    var escapedMarkdown = System.Text.Json.JsonSerializer.Serialize(editorTextBox.Text ?? string.Empty);
-                    previewWebView.CoreWebView2?.ExecuteScriptAsync($"if(window.updateWysiwygEditor) window.updateWysiwygEditor({escapedMarkdown});");
+                    // 何もしない
                 }
-                else if (!wysiwygToolStripMenuItem.Checked)
+                else
                 {
-                    UpdatePreview();
+                    // デバウンス: 連続入力中はタイマーをリセットし、入力が落ち着いてから更新
+                    _previewDebounceTimer.Stop();
+                    _previewDebounceTimer.Start();
                 }
             }
 

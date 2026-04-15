@@ -21,7 +21,15 @@ public class UndoManager
 
     private readonly List<State> _history = new List<State>();
     private int _currentIndex = -1;
-    private const int MaxHistory = 20;
+    private const int DefaultMaxHistory = 20;
+
+    // テキストサイズに応じた履歴上限（大規模ファイルでのメモリ消費を抑制）
+    private static int GetMaxHistory(int textLength)
+    {
+        if (textLength > 500_000) return 5;   // 500KB超: 最大5件
+        if (textLength > 100_000) return 10;  // 100KB超: 最大10件
+        return DefaultMaxHistory;             // 通常: 20件
+    }
 
     public bool CanUndo => _currentIndex > 0;
     public bool CanRedo => _currentIndex < _history.Count - 1;
@@ -43,24 +51,33 @@ public class UndoManager
         }
 
         // Avoid recording the exact same state sequentially
-        if (_currentIndex >= 0 && _history[_currentIndex].Text == text)
+        // ReferenceEqualsで高速に同一インスタンスを排除してからstring比較
+        if (_currentIndex >= 0)
         {
-            _history[_currentIndex] = new State(text, selectionStart, firstVisibleLine); // Update selection and scroll only
-            return;
+            var current = _history[_currentIndex];
+            if (ReferenceEquals(current.Text, text) || current.Text == text)
+            {
+                _history[_currentIndex] = new State(text, selectionStart, firstVisibleLine); // Update selection and scroll only
+                return;
+            }
         }
 
         _history.Add(new State(text, selectionStart, firstVisibleLine));
-        
-        if (_history.Count > MaxHistory + 1) // +1 because the first state is the initial one
+
+        // テキストサイズに応じた動的上限で古い履歴を削除
+        int maxHistory = GetMaxHistory(text.Length);
+        while (_history.Count > maxHistory + 1) // +1 because the first state is the initial one
         {
             _history.RemoveAt(0);
+            // インデックスは増やさない（先頭を削除したのでそのまま）
         }
-        else
+
+        if (_history.Count > _currentIndex + 1)
         {
-            _currentIndex++;
+            _currentIndex = _history.Count - 1;
         }
-        
-        // Ensure index is within bounds if we removed the first item
+
+        // Ensure index is within bounds
         if (_currentIndex >= _history.Count)
         {
             _currentIndex = _history.Count - 1;

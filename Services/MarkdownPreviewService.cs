@@ -62,12 +62,16 @@ public class MarkdownPreviewService
                 function renderMermaid() {
                     document.querySelectorAll('#content pre > code.language-mermaid').forEach((codeBlock) => {
                         const parent = codeBlock.parentElement;
-                        const diagram = document.createElement('div');
-                        diagram.className = 'mermaid';
-                        diagram.textContent = codeBlock.textContent;
-                        parent.replaceWith(diagram);
+                        if (parent) {
+                            const diagram = document.createElement('div');
+                            diagram.className = 'mermaid';
+                            diagram.textContent = codeBlock.textContent;
+                            parent.replaceWith(diagram);
+                        }
                     });
-                    mermaid.run();
+                    if (typeof mermaid !== 'undefined') {
+                        mermaid.run();
+                    }
                 }
 
                 renderMermaid();
