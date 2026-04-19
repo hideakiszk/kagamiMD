@@ -102,6 +102,17 @@ public partial class Form1 : Form
             };
 
             previewWebView.CoreWebView2.WebMessageReceived += PreviewWebView_WebMessageReceived;
+            await previewWebView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(@"
+                window.addEventListener('keydown', (e) => {
+                    if (e.key === 'F6') {
+                        window.chrome.webview.postMessage('F6');
+                        e.preventDefault();
+                    } else if (e.key === 'F5') {
+                        window.chrome.webview.postMessage('F5');
+                        e.preventDefault();
+                    }
+                });
+            ");
             previewReady = true;
             CenterSplitters();
             UpdatePreview();
@@ -286,6 +297,41 @@ public partial class Form1 : Form
         }
     }
 
+    /// <summary>
+    /// 表示モードを「両方」→「左側のみ」→「右側のみ」の順でサイクル切り替えします。
+    /// </summary>
+    private void ToggleDisplayMode()
+    {
+        bool leftVisible = !splitContainer1.Panel1Collapsed;
+        bool rightVisible = !splitContainer1.Panel2Collapsed;
+
+        if (leftVisible && rightVisible)
+        {
+            // 両方 -> 左側のみ
+            SelectDisplayMode(true, false);
+        }
+        else if (leftVisible && !rightVisible)
+        {
+            // 左側のみ -> 右側のみ
+            SelectDisplayMode(false, true);
+        }
+        else
+        {
+            // 右側のみ（または何らかの異常状態） -> 両方
+            SelectDisplayMode(true, true);
+        }
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == Keys.F6)
+        {
+            ToggleDisplayMode();
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
     private void SelectScrollMode(bool synced)
     {
         independentScrollToolStripMenuItem.Checked = !synced;
@@ -344,6 +390,17 @@ public partial class Form1 : Form
         try
         {
             var msgStr = e.TryGetWebMessageAsString();
+
+            if (msgStr == "F6")
+            {
+                ToggleDisplayMode();
+                return;
+            }
+            if (msgStr == "F5")
+            {
+                UpdatePreview();
+                return;
+            }
 
             if (wysiwygToolStripMenuItem.Checked)
             {
