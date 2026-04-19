@@ -8,15 +8,19 @@ namespace KagamiMD;
 
 public partial class Form1 : Form
 {
+    private const int UndoTimerIntervalMs = 800;
+    private const int PreviewDebounceIntervalMs = 300;
+    private const int MouseWheelScrollDivisor = 40;
+    private const int FileMenuBaseItemCount = 6;
+
     private readonly DocumentService _documentService = new DocumentService();
     private readonly MarkdownPreviewService _previewService = new MarkdownPreviewService();
     private readonly ScrollSyncCoordinator _scrollSyncCoordinator = new ScrollSyncCoordinator();
+    private readonly DocumentSession _documentSession = new DocumentSession();
 
     private bool previewReady;
     private bool _previewInitialized;
-    private string? currentFilePath;
     private int _currentTabWidth = 4;
-    private bool _isModified;
     private bool _isSyncingFromWysiwyg;
     private SearchReplaceForm? _searchReplaceForm;
     private readonly UndoManager _undoManager = new UndoManager();
@@ -146,7 +150,7 @@ public partial class Form1 : Form
         syncedScrollToolStripMenuItem.Click += (_, _) => SelectScrollMode(true);
         syncVScrollBar.Scroll += SyncVScrollBar_Scroll;
 
-        _undoTimer.Interval = 800;
+        _undoTimer.Interval = UndoTimerIntervalMs;
         _undoTimer.Tick += (s, e) =>
         {
             _undoTimer.Stop();
@@ -154,7 +158,7 @@ public partial class Form1 : Form
         };
 
         // プレビュー更新のデバウンス（連続入力中の無駄なMarkdownパース+DOM更新を抑制）
-        _previewDebounceTimer.Interval = 300;
+        _previewDebounceTimer.Interval = PreviewDebounceIntervalMs;
         _previewDebounceTimer.Tick += (s, e) =>
         {
             _previewDebounceTimer.Stop();
@@ -175,9 +179,9 @@ public partial class Form1 : Form
 
         editorTextBox.TextChanged += (_, _) => 
         {
-            if (!_isModified)
+            if (!_documentSession.IsModified)
             {
-                _isModified = true;
+                _documentSession.MarkModified();
                 UpdateWindowTitle();
             }
             if (realtimePreviewToolStripMenuItem.Checked)
@@ -372,7 +376,7 @@ public partial class Form1 : Form
         if (!syncedScrollToolStripMenuItem.Checked) return;
 
         // マウスホイールによる手動スクロール（スクロールバーを非表示にしているため）
-        int delta = -e.Delta / 40; // 通常1ノッチ120なので、3行分に相当
+        int delta = -e.Delta / MouseWheelScrollDivisor; // 1ノッチ=120、÷40で3行分に相当
         int newValue = syncVScrollBar.Value + delta;
         
         int range = Math.Max(0, syncVScrollBar.Maximum - syncVScrollBar.LargeChange + 1);
@@ -421,9 +425,9 @@ public partial class Form1 : Form
                             editorTextBox.Text = msgStr;
                             EditorInterop.ScrollLines(editorTextBox.Handle, currentLine);
                             
-                            if (!_isModified)
+                            if (!_documentSession.IsModified)
                             {
-                                _isModified = true;
+                                _documentSession.MarkModified();
                                 UpdateWindowTitle();
                             }
                         
@@ -447,7 +451,7 @@ public partial class Form1 : Form
 
             if (!syncedScrollToolStripMenuItem.Checked) return;
 
-            if (double.TryParse(msgStr, out double ratio))
+            if (double.TryParse(msgStr, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double ratio))
             {
                 int val = syncVScrollBar.Value;
                 _scrollSyncCoordinator.SyncEditorToRatio(editorTextBox.Handle, ratio, syncVScrollBar.Maximum, syncVScrollBar.LargeChange, ref val);
@@ -530,19 +534,18 @@ public partial class Form1 : Form
             return;
         }
 
-        currentFilePath = filePath;
+        _documentSession.Open(filePath);
         _previewInitialized = false;
         previewWebView.CoreWebView2?.ExecuteScriptAsync("sessionStorage.removeItem('previewScrollPos');");
-        var content = _documentService.ReadFile(currentFilePath, out var detectedEncoding);
+        var content = _documentService.ReadFile(_documentSession.CurrentFilePath!, out var detectedEncoding);
         UpdateEncodingMenu(detectedEncoding);
         editorTextBox.Text = content;
         editorTextBox.SelectionStart = 0;
         editorTextBox.SelectionLength = 0;
-        _isModified = false;
         _undoManager.Clear(editorTextBox.Text, 0, EditorInterop.GetFirstVisibleLine(editorTextBox.Handle));
         UpdatePreview();
         UpdateWindowTitle();
-        AddToHistory(currentFilePath);
+        AddToHistory(_documentSession.CurrentFilePath!);
     }
 
     private void AddToHistory(string filePath)
@@ -558,7 +561,7 @@ public partial class Form1 : Form
 
     private void UpdateFileMenuHistory()
     {
-        while (fileToolStripMenuItem.DropDownItems.Count > 6)
+        while (fileToolStripMenuItem.DropDownItems.Count > FileMenuBaseItemCount)
         {
             fileToolStripMenuItem.DropDownItems.RemoveAt(6);
         }
@@ -618,9 +621,6 @@ public partial class Form1 : Form
     {
         _isUndoingRedoing = true;
 
-        // テキスト書き換え前に現在のスクロール位置を取得
-        int currentFirstVisibleLine = EditorInterop.GetFirstVisibleLine(editorTextBox.Handle);
-
         // 描画を一時停止してちらつきを防止
         EditorInterop.SuspendDrawing(editorTextBox.Handle);
         try
@@ -628,8 +628,8 @@ public partial class Form1 : Form
             editorTextBox.Text = state.Text;
             editorTextBox.SelectionStart = Math.Min(state.SelectionStart, editorTextBox.Text.Length);
 
-            // Text代入後はスクロールが0行目にリセットされるため、元の位置まで相対移動
-            EditorInterop.ScrollLines(editorTextBox.Handle, currentFirstVisibleLine);
+            // Text代入後はスクロールが0行目にリセットされるため、保存済みスクロール位置まで相対移動
+            EditorInterop.ScrollLines(editorTextBox.Handle, state.FirstVisibleLine);
         }
         finally
         {
@@ -688,7 +688,7 @@ public partial class Form1 : Form
         int start = editorTextBox.SelectionStart;
         int length = editorTextBox.SelectionLength;
 
-        // もし選択範囲がなく、かつShiftが押されていない場合は通常のタブ挿入
+        // 選択範囲がなく Shift も押されていない場合は通常のタブ文字挿入
         if (length == 0 && !shift)
         {
             RecordUndoState();
@@ -715,62 +715,16 @@ public partial class Form1 : Form
             ? editorTextBox.GetFirstCharIndexFromLine(endLine + 1)
             : editorTextBox.TextLength;
 
-        string[] currentLines = editorTextBox.Lines;
-        StringBuilder sb = new StringBuilder();
+        var (newText, newLen) = TabIndenter.Apply(editorTextBox.Lines, startLine, endLine, _currentTabWidth, deindent: shift);
 
-        for (int i = startLine; i <= endLine; i++)
-        {
-            string line = currentLines[i];
-            if (shift)
-            {
-                // インデント解除
-                if (line.StartsWith("\t"))
-                {
-                    line = line.Substring(1);
-                }
-                else if (line.StartsWith(" "))
-                {
-                    int spaceCount = 0;
-                    while (spaceCount < _currentTabWidth && spaceCount < line.Length && line[spaceCount] == ' ')
-                    {
-                        spaceCount++;
-                    }
-                    line = line.Substring(spaceCount);
-                }
-            }
-            else
-            {
-                // インデント追加
-                line = "\t" + line;
-            }
-            sb.Append(line);
-            
-            // 最後の行であっても、元々改行があった場合は付与する必要がある
-            // TextBox.Lines は改行を含まないが、SelectedText で全行置換する場合は
-            // 範囲内の各行末に改行が必要。
-            // 最後の行以前、またはファイル末尾ではない場合
-            if (i < currentLines.Length - 1)
-            {
-                sb.Append("\r\n");
-            }
-        }
-
-        // 選択範囲を全行分に拡大
+        // 選択範囲を全行分に拡大してから置換
         editorTextBox.SelectionStart = startPos;
         editorTextBox.SelectionLength = lastLineEndPos - startPos;
-        
-        string newText = sb.ToString();
-        // ファイル末尾の選択で、元々末尾に空行があった場合の調整
-        if (lastLineEndPos == editorTextBox.TextLength && editorTextBox.Text.EndsWith("\r\n") && !newText.EndsWith("\r\n"))
-        {
-            // newText += "\r\n"; // 必要に応じて
-        }
-
         editorTextBox.SelectedText = newText;
 
         // 選択範囲を保持
         editorTextBox.SelectionStart = startPos;
-        editorTextBox.SelectionLength = newText.Length;
+        editorTextBox.SelectionLength = newLen;
     }
 
 
@@ -796,14 +750,14 @@ public partial class Form1 : Form
 
     private void SaveFile()
     {
-        if (string.IsNullOrWhiteSpace(currentFilePath))
+        if (string.IsNullOrWhiteSpace(_documentSession.CurrentFilePath))
         {
             SaveFileAs();
             return;
         }
 
-        WriteFile(currentFilePath);
-        _isModified = false;
+        WriteFile(_documentSession.CurrentFilePath);
+        _documentSession.Save(_documentSession.CurrentFilePath);
         UpdateWindowTitle();
     }
 
@@ -816,9 +770,9 @@ public partial class Form1 : Form
             Title = "名前をつけて保存"
         };
 
-        if (!string.IsNullOrWhiteSpace(currentFilePath))
+        if (!string.IsNullOrWhiteSpace(_documentSession.CurrentFilePath))
         {
-            dialog.FileName = Path.GetFileName(currentFilePath);
+            dialog.FileName = Path.GetFileName(_documentSession.CurrentFilePath);
         }
 
         if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -826,11 +780,11 @@ public partial class Form1 : Form
             return;
         }
 
-        currentFilePath = dialog.FileName;
-        WriteFile(currentFilePath);
-        _isModified = false;
+        var newPath = dialog.FileName;
+        WriteFile(newPath);
+        _documentSession.Save(newPath);
         UpdateWindowTitle();
-        AddToHistory(currentFilePath);
+        AddToHistory(newPath);
     }
 
     private void ApplyWordWrap(bool enabled)
@@ -848,22 +802,19 @@ public partial class Form1 : Form
 
     private void UpdateWindowTitle()
     {
-        var fileName = string.IsNullOrWhiteSpace(currentFilePath) ? "KagamiMD" : $"{Path.GetFileName(currentFilePath)} - KagamiMD";
-        Text = _isModified ? fileName + "*" : fileName;
+        Text = _documentSession.GetWindowTitle();
     }
 
     private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
     {
-        if (!_isModified) return;
+        if (!_documentSession.IsModified) return;
 
         var result = MessageBox.Show(this, "変更内容を保存しますか？", "KagamiMD", MessageBoxButtons.YesNoCancel, MessageBoxIcon.None);
 
         if (result == DialogResult.Yes)
         {
             SaveFile();
-            // If SaveFile was cancelled (e.g. in SaveAs dialog), result might be different
-            // but for simplicity, we assume if we reach here we either saved or handled it.
-            if (_isModified) e.Cancel = true; // Still modified means saving was canceled
+            if (_documentSession.IsModified) e.Cancel = true; // Still modified means saving was canceled
         }
         else if (result == DialogResult.Cancel)
         {
@@ -902,7 +853,7 @@ public partial class Form1 : Form
             return;
         }
 
-        var directoryPath = _previewService.GetPreviewBaseDirectoryPath(currentFilePath);
+        var directoryPath = _previewService.GetPreviewBaseDirectoryPath(_documentSession.CurrentFilePath);
         previewWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
             "markdown-preview",
             directoryPath,
@@ -1009,9 +960,9 @@ public partial class Form1 : Form
             Title = "PDFとして保存"
         };
 
-        if (!string.IsNullOrWhiteSpace(currentFilePath))
+        if (!string.IsNullOrWhiteSpace(_documentSession.CurrentFilePath))
         {
-            dialog.FileName = Path.GetFileNameWithoutExtension(currentFilePath) + ".pdf";
+            dialog.FileName = Path.GetFileNameWithoutExtension(_documentSession.CurrentFilePath) + ".pdf";
         }
 
         if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -1045,8 +996,7 @@ public partial class Form1 : Form
     private void InsertTableTemplate()
     {
         RecordUndoState();
-        var table = "|Title1|Title2|Title3|\r\n|---|---|---|\r\n|aaa|aaa|aaa|\r\n|aaa|aaa|aaa|";
-        editorTextBox.SelectedText = table;
+        editorTextBox.SelectedText = EditorTemplates.Table;
     }
 
     private void InsertTextColorTemplate()
@@ -1055,23 +1005,18 @@ public partial class Form1 : Form
         var start = editorTextBox.SelectionStart;
         var len = editorTextBox.SelectionLength;
         var selected = editorTextBox.SelectedText;
-        
-        var prefix = "<span style=\"color:red\">";
-        var suffix = "</span>";
-        
-        editorTextBox.SelectedText = $"{prefix}{selected}{suffix}";
-        
+
+        editorTextBox.SelectedText = $"{EditorTemplates.TextColorPrefix}{selected}{EditorTemplates.TextColorSuffix}";
+
         if (len == 0)
         {
-            // 選択範囲がなかった場合は、タグの間にカーソルを移動
-            editorTextBox.SelectionStart = start + prefix.Length;
+            editorTextBox.SelectionStart = start + EditorTemplates.TextColorPrefix.Length;
         }
         else
         {
-            // 選択範囲があった場合は、タグ全体を選択するか、末尾に移動するか
-            // ここではタグも含めた全体を選択状態にする（再度色を変えたり削除したりしやすくするため）
+            // タグも含めた全体を選択状態にする（再度色を変えたり削除したりしやすくするため）
             editorTextBox.SelectionStart = start;
-            editorTextBox.SelectionLength = prefix.Length + len + suffix.Length;
+            editorTextBox.SelectionLength = EditorTemplates.TextColorPrefix.Length + len + EditorTemplates.TextColorSuffix.Length;
         }
     }
 
@@ -1084,20 +1029,17 @@ public partial class Form1 : Form
 
         if (len == 0)
         {
-            var text = "[リンクのテキスト](リンクのアドレス \"リンクのタイトル\")";
-            editorTextBox.SelectedText = text;
-            // 「リンクのテキスト」部分を選択（1文字目から7文字分）
+            editorTextBox.SelectedText = EditorTemplates.LinkTemplate;
+            // 「リンクのテキスト」部分を選択（先頭の "[" の次から LinkTextLength 文字分）
             editorTextBox.SelectionStart = start + 1;
-            editorTextBox.SelectionLength = 7;
+            editorTextBox.SelectionLength = EditorTemplates.LinkTextLength;
         }
         else
         {
-            var prefix = "[";
-            var middle = "](リンクのアドレス \"リンクのタイトル\")";
-            editorTextBox.SelectedText = $"{prefix}{selected}{middle}";
-            // 「リンクのアドレス」部分を選択状態にする
-            editorTextBox.SelectionStart = start + prefix.Length + len + 2; // "[" + text + "]("
-            editorTextBox.SelectionLength = 8; // "リンクのアドレス"
+            editorTextBox.SelectedText = $"{EditorTemplates.LinkPrefix}{selected}{EditorTemplates.LinkSuffix}";
+            // 「リンクのアドレス」部分を選択状態にする（"[" + text + "](" の後）
+            editorTextBox.SelectionStart = start + EditorTemplates.LinkPrefix.Length + len + 2;
+            editorTextBox.SelectionLength = EditorTemplates.LinkAddressLength;
         }
     }
 }

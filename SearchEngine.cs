@@ -1,7 +1,7 @@
 using System;
 using System.Text.RegularExpressions;
 
-namespace KagamiMD;
+namespace KagamiMD.Services;
 
 /// <summary>
 /// 検索・置換のコアロジックを担当するクラス。

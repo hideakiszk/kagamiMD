@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace KagamiMD;
+namespace KagamiMD.Services;
 
 public class UndoManager
 {
@@ -65,11 +65,11 @@ public class UndoManager
         _history.Add(new State(text, selectionStart, firstVisibleLine));
 
         // テキストサイズに応じた動的上限で古い履歴を削除
+        // （maxHistory + 1 は「最大履歴数 + 初期状態1件」の上限）
         int maxHistory = GetMaxHistory(text.Length);
-        while (_history.Count > maxHistory + 1) // +1 because the first state is the initial one
+        while (_history.Count > maxHistory + 1)
         {
             _history.RemoveAt(0);
-            // インデックスは増やさない（先頭を削除したのでそのまま）
         }
 
         if (_history.Count > _currentIndex + 1)

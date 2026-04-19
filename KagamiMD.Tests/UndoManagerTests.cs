@@ -1,4 +1,4 @@
-using KagamiMD;
+using KagamiMD.Services;
 using Xunit;
 
 namespace KagamiMD.Tests;
